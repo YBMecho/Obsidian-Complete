@@ -1,8 +1,8 @@
 {
-  "id": "obsidian-sample-plugin",
-  "name": "Sample Plugin",
+  "id": "obsidian-complete",
+  "name": "Complete",
   "version": "1.0.0",
-  "description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+  "description": "This is a complete plugin for Obsidian (https://obsidian.md)",
   "author": "Licat",
   "isDesktopOnly": false
 }
