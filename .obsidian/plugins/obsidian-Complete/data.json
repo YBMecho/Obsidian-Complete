@@ -1,3 +1,5 @@
 {
-  "apiKey": "123"
+  "apiKey": "123",
+  "workspaceId": "123",
+  "model": "qwen3.6-max"
 }

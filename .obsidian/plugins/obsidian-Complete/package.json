@@ -1,0 +1,14 @@
+{
+  "name": "obsidian-complete",
+  "version": "1.0.0",
+  "description": "Obsidian AI 补全插件",
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "obsidian": "latest",
+    "typescript": "^5.0.0",
+    "esbuild": "^0.20.0"
+  }
+}
