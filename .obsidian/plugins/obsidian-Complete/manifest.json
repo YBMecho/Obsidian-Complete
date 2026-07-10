@@ -2,7 +2,7 @@
   "id": "obsidian-complete",
   "name": "Complete",
   "version": "1.0.0",
-  "description": "This is a complete plugin for Obsidian (https://obsidian.md)",
-  "author": "Licat",
+  "description": "Obsidian AI 补全插件，集成阿里云百炼平台 API",
+  "author": "YBMecho",
   "isDesktopOnly": false
 }
