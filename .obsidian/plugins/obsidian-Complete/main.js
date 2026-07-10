@@ -2,7 +2,6 @@
 
 var obsidian = require('obsidian');
 
-// ponytail: 编译后的继承辅助，移到顶部避免引用未定义
 var extendStatics = function (d, b) {
     extendStatics = Object.setPrototypeOf ||
         ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
@@ -19,9 +18,7 @@ function __extends(d, b) {
 var CompletePlugin = /** @class */ (function (_super) {
     __extends(CompletePlugin, _super);
     function CompletePlugin() {
-        var _this = _super !== null && _super.apply(this, arguments) || this;
-        _this.settings = { apiKey: '' };
-        return _this;
+        return _super.apply(this, arguments) || this;
     }
     CompletePlugin.prototype.onload = function () {
         var _this = this;
@@ -29,15 +26,11 @@ var CompletePlugin = /** @class */ (function (_super) {
             _this.addSettingTab(new CompleteSettingTab(_this.app, _this));
         });
     };
-    CompletePlugin.prototype.onunload = function () {
-    };
     // 配置保存在 .obsidian/plugins/obsidian-Complete/data.json
     CompletePlugin.prototype.loadSettings = function () {
         var _this = this;
         return this.loadData().then(function (data) {
-            if (data) {
-                _this.settings = Object.assign({ apiKey: '' }, data);
-            }
+            _this.settings = Object.assign({ apiKey: '' }, data);
         });
     };
     CompletePlugin.prototype.saveSettings = function () {
@@ -49,14 +42,13 @@ var CompletePlugin = /** @class */ (function (_super) {
 var CompleteSettingTab = /** @class */ (function (_super) {
     __extends(CompleteSettingTab, _super);
     function CompleteSettingTab() {
-        return _super !== null && _super.apply(this, arguments) || this;
+        return _super.apply(this, arguments) || this;
     }
     CompleteSettingTab.prototype.display = function () {
         var _this = this;
-        var containerEl = this.containerEl;
-        containerEl.empty();
-        containerEl.createEl('h2', { text: 'Complete 配置' });
-        new obsidian.Setting(containerEl)
+        this.containerEl.empty();
+        this.containerEl.createEl('h2', { text: 'Complete 配置' });
+        new obsidian.Setting(this.containerEl)
             .setName('阿里云百炼 API Key')
             .setDesc('用于调用百炼平台大模型服务')
             .addText(function (text) {
