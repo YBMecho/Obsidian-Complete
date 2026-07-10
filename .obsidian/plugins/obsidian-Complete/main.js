@@ -1,6 +1,7 @@
 'use strict';
 
 var obsidian = require('obsidian');
+var fs = require('fs');
 
 var extendStatics = function (d, b) {
     extendStatics = Object.setPrototypeOf ||
@@ -47,7 +48,8 @@ var CompleteSettingTab = /** @class */ (function (_super) {
     CompleteSettingTab.prototype.display = function () {
         var _this = this;
         this.containerEl.empty();
-        var MODELS = require('./models.json');
+        var MODELS = JSON.parse(fs.readFileSync(
+    this.app.vault.adapter.getFullPath(this.plugin.manifest.dir + '/models.json'), 'utf8'));
         this.containerEl.createEl('h2', { text: 'Complete 配置' });
         new obsidian.Setting(this.containerEl)
             .setName('百炼业务空间 ID')
