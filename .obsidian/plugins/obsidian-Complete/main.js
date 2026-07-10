@@ -40,14 +40,14 @@ var MyPlugin = /** @class */ (function (_super) {
     };
     MyPlugin.prototype.onload = function () {
         var _this = this;
-        console.log('loading plugin');
-        this.addRibbonIcon('dice', 'Sample Plugin', function () {
-            new obsidian.Notice('This is a notice!');
+        console.log('加载插件');
+        this.addRibbonIcon('dice', '示例插件', function () {
+            new obsidian.Notice('这是一条提示！');
         });
-        this.addStatusBarItem().setText('Status Bar Text');
+        this.addStatusBarItem().setText('状态栏文本');
         this.addCommand({
             id: 'open-sample-modal',
-            name: 'Open Sample Modal',
+            name: '打开示例模态框',
             // callback: () => {
             // 	console.log('Simple Callback');
             // },
@@ -65,7 +65,7 @@ var MyPlugin = /** @class */ (function (_super) {
         this.addSettingTab(new SampleSettingTab(this.app, this));
     };
     MyPlugin.prototype.onunload = function () {
-        console.log('unloading plugin');
+        console.log('卸载插件');
     };
     return MyPlugin;
 }(obsidian.Plugin));
@@ -76,7 +76,7 @@ var SampleModal = /** @class */ (function (_super) {
     }
     SampleModal.prototype.onOpen = function () {
         var contentEl = this.contentEl;
-        contentEl.setText('Woah!');
+        contentEl.setText('哇！');
     };
     SampleModal.prototype.onClose = function () {
         var contentEl = this.contentEl;
@@ -92,14 +92,14 @@ var SampleSettingTab = /** @class */ (function (_super) {
     SampleSettingTab.prototype.display = function () {
         var containerEl = this.containerEl;
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'Settings for my awesome plugin.' });
+        containerEl.createEl('h2', { text: '我的插件设置。' });
         new obsidian.Setting(containerEl)
-            .setName('Setting #1')
-            .setDesc('It\'s a secret')
-            .addText(function (text) { return text.setPlaceholder('Enter your secret')
+            .setName('设置项 #1')
+            .setDesc('这是一个秘密')
+            .addText(function (text) { return text.setPlaceholder('请输入你的秘密')
             .setValue('')
             .onChange(function (value) {
-            console.log('Secret: ' + value);
+            console.log('秘密：' + value);
         }); });
     };
     return SampleSettingTab;
