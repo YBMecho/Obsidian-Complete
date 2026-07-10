@@ -3,7 +3,7 @@ import esbuild from 'esbuild';
 esbuild.build({
   entryPoints: ['main.ts'],
   bundle: true,
-  external: ['obsidian'],
+  external: ['obsidian', '@codemirror/view', '@codemirror/state'],
   format: 'cjs',
   platform: 'node',
   target: 'es2020',

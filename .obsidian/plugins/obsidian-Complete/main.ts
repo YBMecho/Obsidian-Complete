@@ -1,7 +1,34 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Editor } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Editor, EditorPosition } from 'obsidian';
 import MODELS from './models.json';
+import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
+import { StateField, StateEffect } from '@codemirror/state';
 
-const MAX_PREFIX_LENGTH = 700000; // 70 万字
+const MAX_PREFIX_LENGTH = 1000;
+
+// 高亮装饰器：StateEffect 用于设置/清除补全高亮范围
+const setHighlight = StateEffect.define<{ from: number; to: number } | null>();
+
+const highlightField = StateField.define<DecorationSet>({
+	create() {
+		return Decoration.none;
+	},
+	update(decorations, tr) {
+		for (const e of tr.effects) {
+			if (e.is(setHighlight)) {
+				if (e.value === null) return Decoration.none;
+				return Decoration.set([
+					Decoration.mark({
+						attributes: {
+							style: 'background-color: #73AE52; color: #FBF1D7;',
+						},
+					}).range(e.value.from, e.value.to),
+				]);
+			}
+		}
+		return decorations;
+	},
+	provide: (f) => EditorView.decorations.from(f),
+});
 
 interface CompleteSettings {
 	apiKey: string;
@@ -18,9 +45,17 @@ const DEFAULT_SETTINGS: CompleteSettings = {
 export default class CompletePlugin extends Plugin {
 	settings: CompleteSettings = DEFAULT_SETTINGS;
 	private abortController: AbortController | null = null;
+	private timedOut = false;
+	private keyHandler: ((e: KeyboardEvent) => void) | null = null;
+	private activeCM: EditorView | null = null;
+	private insertedRange: { from: EditorPosition; to: EditorPosition } | null = null;
+	private activeEditor: Editor | null = null;
 
 	async onload() {
 		await this.loadSettings();
+
+		// 注册高亮装饰器扩展
+		this.registerEditorExtension(highlightField);
 
 		this.addCommand({
 			id: 'trigger-complete',
@@ -53,9 +88,10 @@ export default class CompletePlugin extends Plugin {
 		}
 
 		// 截断：保留最接近光标的 70 万字
-		const prefix = textBefore.length > MAX_PREFIX_LENGTH
-			? textBefore.slice(-MAX_PREFIX_LENGTH)
-			: textBefore;
+		const prefix =
+			textBefore.length > MAX_PREFIX_LENGTH
+				? textBefore.slice(-MAX_PREFIX_LENGTH)
+				: textBefore;
 
 		// 检查配置
 		if (!this.settings.apiKey) {
@@ -67,6 +103,9 @@ export default class CompletePlugin extends Plugin {
 			return;
 		}
 
+		// 清除上一次的补全状态
+		this.clearCompletion();
+
 		const url = `https://${this.settings.workspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
 
 		const body = {
@@ -74,7 +113,8 @@ export default class CompletePlugin extends Plugin {
 			messages: [
 				{
 					role: 'user',
-					content: '请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。',
+					content:
+						'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。',
 				},
 				{
 					role: 'assistant',
@@ -87,12 +127,18 @@ export default class CompletePlugin extends Plugin {
 		this.abortController = new AbortController();
 		const notice = new Notice('AI 正在补全...', 0);
 
+		// 2 分钟超时
+		const timeoutId = setTimeout(() => {
+			this.timedOut = true;
+			this.abortController?.abort();
+		}, 2 * 60 * 1000);
+
 		try {
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${this.settings.apiKey}`,
+					Authorization: `Bearer ${this.settings.apiKey}`,
 				},
 				body: JSON.stringify(body),
 				signal: this.abortController.signal,
@@ -107,19 +153,100 @@ export default class CompletePlugin extends Plugin {
 			const data = await response.json();
 			const content = data.choices?.[0]?.message?.content;
 			if (content) {
-				editor.replaceRange(content, editor.getCursor());
+				const startPos = editor.getCursor();
+				editor.replaceRange(content, startPos);
+
+				// 根据内容行数计算结束位置
+				const lines = content.split('\n');
+				const endPos: EditorPosition = {
+					line: startPos.line + lines.length - 1,
+					ch:
+						lines.length === 1
+							? startPos.ch + lines[0].length
+							: lines[lines.length - 1].length,
+				};
+
+				// 记录插入范围，用于 Esc 撤销
+				this.insertedRange = { from: startPos, to: endPos };
+				this.activeEditor = editor;
+
+				// 获取 CodeMirror EditorView 实例
+				const cm = (editor as any).cm as EditorView;
+				this.activeCM = cm;
+
+				// 将行列位置转为文档偏移量
+				const from =
+					cm.state.doc.line(startPos.line + 1).from + startPos.ch;
+				const to =
+					cm.state.doc.line(endPos.line + 1).from + endPos.ch;
+
+				if (from === to) return; // 空内容跳过
+
+				// 应用高亮
+				cm.dispatch({ effects: setHighlight.of({ from, to }) });
+
+				// 监听 Tab 取消高亮 / Esc 撤销补全（挂在 CM DOM 上避免被 Obsidian 拦截）
+				const cmDom = cm.dom;
+				this.keyHandler = (e: KeyboardEvent) => {
+					if (e.key === 'Tab') {
+						e.preventDefault();
+						e.stopPropagation();
+						this.clearCompletion();
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						e.stopPropagation();
+						this.undoCompletion();
+					}
+				};
+				cmDom.addEventListener('keydown', this.keyHandler, true);
 			} else {
-				new Notice('补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max');
+				new Notice(
+					'补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max'
+				);
 			}
 		} catch (e: unknown) {
 			if (e instanceof Error && e.name === 'AbortError') {
-				new Notice('已取消补全');
+				new Notice(this.timedOut ? '补全超时：AI 生成超过 2 分钟，已停止' : '已取消补全');
 			} else {
-				new Notice(`补全出错: ${e instanceof Error ? e.message : String(e)}`);
+				new Notice(
+					`补全出错: ${e instanceof Error ? e.message : String(e)}`
+				);
 			}
 		} finally {
+			clearTimeout(timeoutId);
+			this.timedOut = false;
 			this.abortController = null;
 			notice.hide();
+		}
+	}
+
+	/** 清除补全高亮和按键监听（内容保留） */
+	private clearCompletion() {
+		this.removeKeyHandler();
+		if (this.activeCM) {
+			this.activeCM.dispatch({ effects: setHighlight.of(null) });
+			this.activeCM = null;
+		}
+	}
+
+	/** 撤销补全：删除插入内容 + 清除高亮 */
+	private undoCompletion() {
+		if (this.activeEditor && this.insertedRange) {
+			this.activeEditor.replaceRange(
+				'',
+				this.insertedRange.from,
+				this.insertedRange.to
+			);
+		}
+		this.clearCompletion();
+		this.insertedRange = null;
+		this.activeEditor = null;
+	}
+
+	private removeKeyHandler() {
+		if (this.keyHandler && this.activeCM) {
+			this.activeCM.dom.removeEventListener('keydown', this.keyHandler, true);
+			this.keyHandler = null;
 		}
 	}
 }
