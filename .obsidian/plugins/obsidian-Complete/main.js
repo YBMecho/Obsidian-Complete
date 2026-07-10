@@ -23,6 +23,14 @@ var CompletePlugin = /** @class */ (function (_super) {
     }
     CompletePlugin.prototype.onload = function () {
         var _this = this;
+        this.addCommand({
+            id: 'trigger-complete',
+            name: '触发 AI 补全',
+            editorCallback: function (editor, view) {
+                // TODO: 实现 AI 补全逻辑
+                new obsidian.Notice('补全功能开发中...');
+            }
+        });
         this.loadSettings().then(function () {
             _this.addSettingTab(new CompleteSettingTab(_this.app, _this));
         });
