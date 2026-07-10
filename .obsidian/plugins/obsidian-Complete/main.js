@@ -31,6 +31,7 @@ var CompletePlugin = /** @class */ (function (_super) {
     };
     CompletePlugin.prototype.onunload = function () {
     };
+    // 配置保存在 .obsidian/plugins/obsidian-Complete/data.json
     CompletePlugin.prototype.loadSettings = function () {
         var _this = this;
         return this.loadData().then(function (data) {
