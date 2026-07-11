@@ -267,6 +267,8 @@ class CompleteSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'Complete 配置' });
 
+		containerEl.createEl('h4', { text: '阿里云' });
+
 		new Setting(containerEl)
 			.setName('百炼业务空间 ID')
 			.setDesc('阿里云百炼平台的业务空间标识')
@@ -305,5 +307,7 @@ class CompleteSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		containerEl.createEl('h4', { text: 'DeepSeek' });
 	}
 }
