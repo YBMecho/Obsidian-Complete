@@ -4,6 +4,7 @@ import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 
 const MAX_PREFIX_LENGTH = 1000;
+const MAX_FIM_TOKENS = 4096;
 
 // 高亮装饰器：StateEffect 用于设置/清除补全高亮范围
 const setHighlight = StateEffect.define<{ from: number; to: number } | null>();
@@ -34,12 +35,14 @@ interface CompleteSettings {
 	apiKey: string;
 	workspaceId: string;
 	model: string;
+	deepSeekApiKey: string;
 }
 
 const DEFAULT_SETTINGS: CompleteSettings = {
 	apiKey: '',
 	workspaceId: '',
 	model: 'qwen3.7-plus',
+	deepSeekApiKey: '',
 };
 
 export default class CompletePlugin extends Plugin {
@@ -65,6 +68,14 @@ export default class CompletePlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'trigger-fim-complete',
+			name: '触发 AI FIM 补全',
+			editorCallback: (editor: Editor) => {
+				this.triggerCompletion(editor, true);
+			},
+		});
+
 		this.addSettingTab(new CompleteSettingTab(this.app, this));
 	}
 
@@ -76,56 +87,98 @@ export default class CompletePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	private async triggerCompletion(editor: Editor) {
+	private async triggerCompletion(editor: Editor, forceFim = false) {
 		const cursor = editor.getCursor();
 
-		// 获取光标前的全部文本
-		const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
-
-		if (!textBefore.trim()) {
-			new Notice('光标前没有文本内容，无法补全');
+		// 先检查光标前 10 行内是否有实质内容
+		const tenLinesStartLine = Math.max(0, cursor.line - 9);
+		const textBeforeTenLines = editor.getRange(
+			{ line: tenLinesStartLine, ch: 0 },
+			cursor
+		);
+		if (!textBeforeTenLines.trim()) {
+			new Notice('光标前 10 行内没有文本内容，无法补全');
 			return;
 		}
 
-		// 截断：保留最接近光标的 70 万字
-		const prefix =
-			textBefore.length > MAX_PREFIX_LENGTH
-				? textBefore.slice(-MAX_PREFIX_LENGTH)
-				: textBefore;
+		const docEnd = editor.lastLine() + 1;
+
+		// FIM 上下文：光标附近各 5 行
+		const fimContextStart = Math.max(0, cursor.line - 4);
+		const fimContextEnd = Math.min(docEnd, cursor.line + 6);
+		const fimPrefix = editor.getRange(
+			{ line: fimContextStart, ch: 0 },
+			cursor
+		);
+		const fimSuffix = editor.getRange(
+			cursor,
+			{ line: fimContextEnd - 1, ch: editor.getLine(fimContextEnd - 1).length }
+		).trim();
+
+		if (forceFim && !fimSuffix.length) {
+			new Notice('FIM 补全需要光标后面有文本内容');
+			return;
+		}
+		const useFim = fimSuffix.length > 0;
 
 		// 检查配置
-		if (!this.settings.apiKey) {
-			new Notice('请先在设置中配置百炼 API Key');
-			return;
-		}
-		if (!this.settings.workspaceId) {
-			new Notice('请先在设置中配置百炼业务空间 ID');
-			return;
+		if (useFim) {
+			if (!this.settings.deepSeekApiKey) {
+				new Notice('请先在设置中配置 DeepSeek API Key');
+				return;
+			}
+		} else {
+			if (!this.settings.apiKey) {
+				new Notice('请先在设置中配置百炼 API Key');
+				return;
+			}
+			if (!this.settings.workspaceId) {
+				new Notice('请先在设置中配置百炼业务空间 ID');
+				return;
+			}
 		}
 
 		// 清除上一次的补全状态
 		this.clearCompletion();
 
-		const url = `https://${this.settings.workspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
+		let url: string;
+		let body: Record<string, unknown>;
 
-		const body = {
-			model: this.settings.model,
-			messages: [
-				{
-					role: 'user',
-					content:
-						'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。',
-				},
-				{
-					role: 'assistant',
-					content: prefix,
-					partial: true,
-				},
-			],
-		};
+		if (useFim) {
+			url = 'https://api.deepseek.com/beta/completions';
+			body = {
+				model: 'deepseek-v4-pro',
+				prompt: fimPrefix,
+				suffix: fimSuffix,
+				max_tokens: MAX_FIM_TOKENS,
+				temperature: 0.7,
+			};
+		} else {
+			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
+			const prefix =
+				textBefore.length > MAX_PREFIX_LENGTH
+					? textBefore.slice(-MAX_PREFIX_LENGTH)
+					: textBefore;
+			url = `https://${this.settings.workspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
+			body = {
+				model: this.settings.model,
+				messages: [
+					{
+						role: 'user',
+						content:
+							'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。',
+					},
+					{
+						role: 'assistant',
+						content: prefix,
+						partial: true,
+					},
+				],
+			};
+		}
 
 		this.abortController = new AbortController();
-		const notice = new Notice('AI 正在补全...', 0);
+		const notice = new Notice(useFim ? 'AI 正在 FIM 补全...' : 'AI 正在补全...', 0);
 
 		// 2 分钟超时
 		const timeoutId = setTimeout(() => {
@@ -138,7 +191,7 @@ export default class CompletePlugin extends Plugin {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${this.settings.apiKey}`,
+					Authorization: `Bearer ${useFim ? this.settings.deepSeekApiKey : this.settings.apiKey}`,
 				},
 				body: JSON.stringify(body),
 				signal: this.abortController.signal,
@@ -151,7 +204,10 @@ export default class CompletePlugin extends Plugin {
 			}
 
 			const data = await response.json();
-			const content = data.choices?.[0]?.message?.content;
+			// FIM 用 choices[0].text，阿里云用 choices[0].message.content
+			const content = useFim
+				? data.choices?.[0]?.text
+				: data.choices?.[0]?.message?.content;
 			if (content) {
 				const startPos = editor.getCursor();
 				editor.replaceRange(content, startPos);
@@ -201,7 +257,9 @@ export default class CompletePlugin extends Plugin {
 				cmDom.addEventListener('keydown', this.keyHandler, true);
 			} else {
 				new Notice(
-					'补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max'
+					useFim
+						? '补全失败：FIM 模型返回了空内容'
+						: '补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max'
 				);
 			}
 		} catch (e: unknown) {
@@ -309,5 +367,22 @@ class CompleteSettingTab extends PluginSettingTab {
 			});
 
 		containerEl.createEl('h4', { text: 'DeepSeek' });
+
+		new Setting(containerEl)
+			.setName('DeepSeek API Key')
+			.setDesc('用于调用 DeepSeek 模型服务')
+			.addText((text) =>
+				text
+					.setPlaceholder('请输入你的 DeepSeek API Key')
+					.setValue(this.plugin.settings.deepSeekApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.deepSeekApiKey = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('DeepSeek FIM 模型')
+			.setDesc('当前：deepseek-v4-pro');
 	}
 }
