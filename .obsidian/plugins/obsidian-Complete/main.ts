@@ -152,6 +152,8 @@ export default class CompletePlugin extends Plugin {
 				suffix: fimSuffix,
 				max_tokens: MAX_FIM_TOKENS,
 				temperature: 0.7,
+				stream: true,
+				stream_options: { include_usage: true },
 			};
 		} else {
 			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
@@ -166,7 +168,7 @@ export default class CompletePlugin extends Plugin {
 					{
 						role: 'user',
 						content:
-							'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。',
+							'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。输出后缀内容要不超过前缀内容的2倍。',
 					},
 					{
 						role: 'assistant',
@@ -203,64 +205,144 @@ export default class CompletePlugin extends Plugin {
 				return;
 			}
 
-			const data = await response.json();
-			// FIM 用 choices[0].text，阿里云用 choices[0].message.content
-			const content = useFim
-				? data.choices?.[0]?.text
-				: data.choices?.[0]?.message?.content;
-			if (content) {
-				const startPos = editor.getCursor();
-				editor.replaceRange(content, startPos);
+			if (useFim) {
+				// DeepSeek FIM 流式 SSE 输出
+				const reader = response.body?.getReader();
+				if (!reader) {
+					new Notice('无法读取流式响应');
+					return;
+				}
 
-				// 根据内容行数计算结束位置
-				const lines = content.split('\n');
-				const endPos: EditorPosition = {
-					line: startPos.line + lines.length - 1,
-					ch:
-						lines.length === 1
-							? startPos.ch + lines[0].length
-							: lines[lines.length - 1].length,
-				};
+				const decoder = new TextDecoder();
+				let fullContent = '';
+				let startPos: EditorPosition | null = null;
+				let endPos: EditorPosition | null = null;
+				let buffer = '';
 
-				// 记录插入范围，用于 Esc 撤销
-				this.insertedRange = { from: startPos, to: endPos };
-				this.activeEditor = editor;
-
-				// 获取 CodeMirror EditorView 实例
 				const cm = (editor as any).cm as EditorView;
-				this.activeCM = cm;
 
-				// 将行列位置转为文档偏移量
-				const from =
-					cm.state.doc.line(startPos.line + 1).from + startPos.ch;
-				const to =
-					cm.state.doc.line(endPos.line + 1).from + endPos.ch;
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
 
-				if (from === to) return; // 空内容跳过
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split('\n');
+					buffer = lines.pop() || '';
 
-				// 应用高亮
-				cm.dispatch({ effects: setHighlight.of({ from, to }) });
+					for (const line of lines) {
+						const trimmed = line.trim();
+						if (!trimmed || !trimmed.startsWith('data:')) continue;
+						const dataStr = trimmed.slice(5).trim(); // 去掉 "data:" 前缀
+						if (dataStr === '[DONE]') continue;
 
-				// 监听 Tab 取消高亮 / Esc 撤销补全（挂在 CM DOM 上避免被 Obsidian 拦截）
-				const cmDom = cm.dom;
-				this.keyHandler = (e: KeyboardEvent) => {
-					if (e.key === 'Tab') {
-						e.preventDefault();
-						e.stopPropagation();
-						this.clearCompletion();
-					} else if (e.key === 'Escape') {
-						e.preventDefault();
-						e.stopPropagation();
-						this.undoCompletion();
+						try {
+							const chunk = JSON.parse(dataStr);
+							const text = chunk.choices?.[0]?.text;
+							if (text) {
+								if (!startPos) {
+									startPos = editor.getCursor();
+								}
+								fullContent += text;
+								const currentEnd = endPos || startPos;
+								editor.replaceRange(fullContent, startPos, currentEnd);
+
+								const contentLines = fullContent.split('\n');
+								endPos = {
+									line: startPos.line + contentLines.length - 1,
+									ch:
+										contentLines.length === 1
+											? startPos.ch + contentLines[0].length
+											: contentLines[contentLines.length - 1].length,
+								};
+
+								// 更新高亮
+								const from =
+									cm.state.doc.line(startPos.line + 1).from + startPos.ch;
+								const to = from + fullContent.length;
+								if (from !== to) {
+									cm.dispatch({ effects: setHighlight.of({ from, to }) });
+								}
+							}
+						} catch {
+							// 跳过解析失败的 JSON 行
+						}
 					}
-				};
-				cmDom.addEventListener('keydown', this.keyHandler, true);
+				}
+
+				if (fullContent) {
+					this.insertedRange = { from: startPos!, to: endPos! };
+					this.activeEditor = editor;
+					this.activeCM = cm;
+
+					const cmDom = cm.dom;
+					this.keyHandler = (e: KeyboardEvent) => {
+						if (e.key === 'Tab') {
+							e.preventDefault();
+							e.stopPropagation();
+							this.clearCompletion();
+						} else if (e.key === 'Escape') {
+							e.preventDefault();
+							e.stopPropagation();
+							this.undoCompletion();
+						}
+					};
+					cmDom.addEventListener('keydown', this.keyHandler, true);
+				} else {
+					new Notice('补全失败：FIM 模型返回了空内容');
+				}
 			} else {
-				new Notice(
-					useFim
-						? '补全失败：FIM 模型返回了空内容'
-						: '补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max'
-				);
+				const data = await response.json();
+				const content = data.choices?.[0]?.message?.content;
+				if (content) {
+					const startPos = editor.getCursor();
+					editor.replaceRange(content, startPos);
+
+					// 根据内容行数计算结束位置
+					const lines = content.split('\n');
+					const endPos: EditorPosition = {
+						line: startPos.line + lines.length - 1,
+						ch:
+							lines.length === 1
+								? startPos.ch + lines[0].length
+								: lines[lines.length - 1].length,
+					};
+
+					// 记录插入范围，用于 Esc 撤销
+					this.insertedRange = { from: startPos, to: endPos };
+					this.activeEditor = editor;
+
+					// 获取 CodeMirror EditorView 实例
+					const cm = (editor as any).cm as EditorView;
+					this.activeCM = cm;
+
+					// 将行列位置转为文档偏移量
+					const from =
+						cm.state.doc.line(startPos.line + 1).from + startPos.ch;
+					const to =
+						cm.state.doc.line(endPos.line + 1).from + endPos.ch;
+
+					if (from === to) return; // 空内容跳过
+
+					// 应用高亮
+					cm.dispatch({ effects: setHighlight.of({ from, to }) });
+
+					// 监听 Tab 取消高亮 / Esc 撤销补全（挂在 CM DOM 上避免被 Obsidian 拦截）
+					const cmDom = cm.dom;
+					this.keyHandler = (e: KeyboardEvent) => {
+						if (e.key === 'Tab') {
+							e.preventDefault();
+							e.stopPropagation();
+							this.clearCompletion();
+						} else if (e.key === 'Escape') {
+							e.preventDefault();
+							e.stopPropagation();
+							this.undoCompletion();
+						}
+					};
+					cmDom.addEventListener('keydown', this.keyHandler, true);
+				} else {
+					new Notice('补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max');
+				}
 			}
 		} catch (e: unknown) {
 			if (e instanceof Error && e.name === 'AbortError') {
