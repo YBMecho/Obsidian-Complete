@@ -288,7 +288,7 @@ export default class CompletePlugin extends Plugin {
 					};
 					cmDom.addEventListener('keydown', this.keyHandler, true);
 				} else {
-					new Notice('补全失败：FIM 模型返回了空内容');
+					new Notice('补全失败：FIM 模型返回了空内容\n该模式对自然语言、Markdown 的补全效果不佳（DeepSeek FIM 主要针对代码场景设计）');
 				}
 			} else {
 				const data = await response.json();
