@@ -175,7 +175,17 @@ export default class CompletePlugin extends Plugin {
 		const { url, body } = this.buildRequest(useFim, editor, cursor, fimPrefix, fimSuffix);
 
 		this.abortController = new AbortController();
-		const notice = new Notice(useFim ? 'AI 正在 FIM 补全...' : 'AI 正在补全...', 0);
+		
+		// 生成提示信息
+		let noticeText = 'AI 正在补全...';
+		if (useFim) {
+			noticeText = 'AI 正在 FIM 补全（deepseek-v4-pro）...';
+		} else if (isDeepSeek) {
+			noticeText = `AI 正在 PC 补全（${this.settings.model}）...`;
+		} else {
+			noticeText = `AI 正在 PC 补全（${this.settings.model}）...`;
+		}
+		const notice = new Notice(noticeText, 0);
 
 		const timeoutId = setTimeout(() => {
 			this.timedOut = true;
@@ -203,7 +213,7 @@ export default class CompletePlugin extends Plugin {
 			if (useFim) {
 				await this.handleFimStream(response, editor, notice);
 			} else if (isDeepSeek) {
-				await this.handleDeepSeekResponse(response, editor, notice);
+				await this.handleDeepSeekStream(response, editor, notice);
 			} else {
 				await this.handleStandardResponse(response, editor, notice);
 			}
@@ -256,6 +266,7 @@ export default class CompletePlugin extends Plugin {
 						{ role: 'user', content: '请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。' },
 						{ role: 'assistant', content: prefix, prefix: true },
 					],
+					stream: true,
 				},
 			};
 		}
@@ -328,6 +339,84 @@ export default class CompletePlugin extends Plugin {
 
 		cm.dispatch({ effects: setHighlight.of({ from, to }) });
 		this.installKeyHandler(cm);
+	}
+
+	private async handleDeepSeekStream(response: Response, editor: Editor, notice: Notice) {
+		const reader = response.body?.getReader();
+		if (!reader) {
+			new Notice('无法读取流式响应');
+			return;
+		}
+
+		const decoder = new TextDecoder();
+		let fullContent = '';
+		let startPos: EditorPosition | null = null;
+		let lastEnd: EditorPosition | null = null;
+		let buffer = '';
+
+		const cm = (editor as ObsidianEditor).cm;
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					const trimmed = line.trim();
+					if (!trimmed || !trimmed.startsWith('data:')) continue;
+					const dataStr = trimmed.slice(5).trim();
+					if (dataStr === '[DONE]') continue;
+
+					let chunk: { choices?: { delta?: { content?: string } }[] };
+					try {
+						chunk = JSON.parse(dataStr);
+					} catch (err) {
+						console.warn('DeepSeek SSE 解析失败:', dataStr, err);
+						continue;
+					}
+
+					const text = chunk.choices?.[0]?.delta?.content;
+					if (!text) continue;
+
+					if (!startPos) {
+						startPos = editor.getCursor();
+					}
+					fullContent += text;
+
+					// 关键：第一帧 lastEnd 为 null，纯插入；后续帧用上一次的 lastEnd 作为终点
+					const currentEnd = lastEnd || startPos;
+					editor.replaceRange(fullContent, startPos, currentEnd);
+					lastEnd = calculateEndPos(startPos, fullContent);
+
+					// 实时更新高亮
+					const from = posToOffset(cm, startPos.line, startPos.ch);
+					const to = from + fullContent.length;
+					if (from !== to) {
+						cm.dispatch({ effects: setHighlight.of({ from, to }) });
+					}
+				}
+			}
+		} finally {
+			try {
+				reader.releaseLock();
+			} catch {
+				// reader 已关闭，忽略
+			}
+		}
+
+		if (fullContent && startPos) {
+			const endPos = calculateEndPos(startPos, fullContent);
+			this.insertedRange = { from: startPos, to: endPos };
+			this.activeEditor = editor;
+			this.activeCM = cm;
+			this.installKeyHandler(cm);
+		} else {
+			new Notice('补全失败：DeepSeek 模型返回了空内容');
+		}
 	}
 
 	private async handleFimStream(response: Response, editor: Editor, notice: Notice) {
