@@ -149,14 +149,15 @@ export default class CompletePlugin extends Plugin {
 			new Notice('FIM 补全需要光标后面有文本内容');
 			return;
 		}
-		const useFim = fimSuffix.length > 0;
+		const useFim = forceFim && fimSuffix.length > 0;
 
 		// 配置校验
-		if (useFim && !this.settings.deepSeekApiKey) {
-			new Notice('请先在设置中配置 DeepSeek API Key');
+		const isDeepSeek = this.settings.provider === 'deepseek';
+		if (isDeepSeek && !this.settings.deepSeekApiKey) {
+			new Notice('请先在设置中配置 DeepSeek (Beta) API Key');
 			return;
 		}
-		if (!useFim) {
+		if (!isDeepSeek && !useFim) {
 			if (!this.settings.apiKey) {
 				new Notice('请先在设置中配置百炼 API Key');
 				return;
@@ -182,11 +183,12 @@ export default class CompletePlugin extends Plugin {
 		}, REQUEST_TIMEOUT_MS);
 
 		try {
+			const apiKey = (isDeepSeek || useFim) ? this.settings.deepSeekApiKey : this.settings.apiKey;
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${useFim ? this.settings.deepSeekApiKey : this.settings.apiKey}`,
+					Authorization: `Bearer ${apiKey}`,
 				},
 				body: JSON.stringify(body),
 				signal: this.abortController.signal,
@@ -200,6 +202,8 @@ export default class CompletePlugin extends Plugin {
 
 			if (useFim) {
 				await this.handleFimStream(response, editor, notice);
+			} else if (isDeepSeek) {
+				await this.handleDeepSeekResponse(response, editor, notice);
 			} else {
 				await this.handleStandardResponse(response, editor, notice);
 			}
@@ -224,6 +228,8 @@ export default class CompletePlugin extends Plugin {
 		fimPrefix: string,
 		fimSuffix: string
 	): { url: string; body: Record<string, unknown> } {
+		const isDeepSeek = this.settings.provider === 'deepseek';
+
 		if (useFim) {
 			return {
 				url: 'https://api.deepseek.com/beta/completions',
@@ -235,6 +241,21 @@ export default class CompletePlugin extends Plugin {
 					temperature: 0.7,
 					stream: true,
 					stream_options: { include_usage: true },
+				},
+			};
+		}
+
+		if (isDeepSeek) {
+			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
+			const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
+			return {
+				url: 'https://api.deepseek.com/beta/chat/completions',
+				body: {
+					model: this.settings.model,
+					messages: [
+						{ role: 'user', content: '请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。' },
+						{ role: 'assistant', content: prefix, prefix: true },
+					],
 				},
 			};
 		}
@@ -262,6 +283,32 @@ export default class CompletePlugin extends Plugin {
 		const content = data.choices?.[0]?.message?.content;
 		if (!content) {
 			new Notice('补全失败：模型返回了空内容，试试换 qwen-plus 或 qwen3.7-max');
+			return;
+		}
+
+		const startPos = editor.getCursor();
+		editor.replaceRange(content, startPos);
+		const endPos = calculateEndPos(startPos, content);
+
+		// 记录插入范围和高亮
+		const cm = (editor as ObsidianEditor).cm;
+		this.insertedRange = { from: startPos, to: endPos };
+		this.activeEditor = editor;
+		this.activeCM = cm;
+
+		const from = posToOffset(cm, startPos.line, startPos.ch);
+		const to = posToOffset(cm, endPos.line, endPos.ch);
+		if (from === to) return; // 空内容跳过
+
+		cm.dispatch({ effects: setHighlight.of({ from, to }) });
+		this.installKeyHandler(cm);
+	}
+
+	private async handleDeepSeekResponse(response: Response, editor: Editor, notice: Notice) {
+		const data = await response.json();
+		const content = data.choices?.[0]?.message?.content;
+		if (!content) {
+			new Notice('补全失败：DeepSeek 模型返回了空内容');
 			return;
 		}
 
@@ -453,7 +500,7 @@ class CompleteSettingTab extends PluginSettingTab {
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOption('aliyun', '阿里云')
-					.addOption('deepseek', 'DeepSeek')
+					.addOption('deepseek', 'DeepSeek (Beta)')
 					.setValue(this.plugin.settings.provider)
 					.onChange(async (value) => {
 						this.plugin.settings.provider = value as 'aliyun' | 'deepseek';
@@ -466,17 +513,17 @@ class CompleteSettingTab extends PluginSettingTab {
 
 		// 动态分组
 		const providerGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek' : '阿里云' });
+		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek (Beta)' : '阿里云' });
 		providerHeading.style.marginBottom = '0.5em';
 		const providerItems = providerGroup.createDiv({ cls: 'setting-items' });
 
 		if (isDeepSeek) {
 			new Setting(providerItems)
-				.setName('DeepSeek API Key')
-				.setDesc('用于调用 DeepSeek 补全服务')
+				.setName('DeepSeek (Beta) API Key')
+				.setDesc('用于调用 DeepSeek (Beta) 补全服务')
 				.addText((text) =>
 					text
-						.setPlaceholder('请输入你的 DeepSeek API Key')
+						.setPlaceholder('请输入你的 DeepSeek (Beta) API Key')
 						.setValue(this.plugin.settings.deepSeekApiKey)
 						.onChange(async (value) => {
 							this.plugin.settings.deepSeekApiKey = value.trim();
@@ -537,18 +584,18 @@ class CompleteSettingTab extends PluginSettingTab {
 				});
 		}
 
-		// DeepSeek FIM 配置
+		// DeepSeek (Beta) FIM 配置
 		const fimGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek FIM' });
+		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek (Beta) FIM' });
 		fimHeading.style.marginBottom = '0.5em';
 		const fimItems = fimGroup.createDiv({ cls: 'setting-items' });
 
 		new Setting(fimItems)
-			.setName('DeepSeek API Key')
-			.setDesc('用于调用 DeepSeek FIM 补全服务')
+			.setName('DeepSeek (Beta) API Key')
+			.setDesc('用于调用 DeepSeek FIM (Beta) 补全服务')
 			.addText((text) =>
 				text
-					.setPlaceholder('请输入你的 DeepSeek API Key')
+					.setPlaceholder('请输入你的 DeepSeek (Beta) API Key')
 					.setValue(this.plugin.settings.deepSeekApiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.deepSeekApiKey = value.trim();
@@ -561,3 +608,4 @@ class CompleteSettingTab extends PluginSettingTab {
 			.setDesc('当前：deepseek-v4-pro');
 	}
 }
+ 
