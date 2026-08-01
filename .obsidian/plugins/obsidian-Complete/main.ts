@@ -43,6 +43,7 @@ interface CompleteSettings {
 	workspaceId: string;
 	model: string;
 	deepSeekApiKey: string;
+	provider: 'aliyun' | 'deepseek';
 }
 
 const DEFAULT_SETTINGS: CompleteSettings = {
@@ -50,6 +51,7 @@ const DEFAULT_SETTINGS: CompleteSettings = {
 	workspaceId: '',
 	model: 'qwen3.7-plus',
 	deepSeekApiKey: '',
+	provider: 'aliyun',
 };
 
 // 把 (line, ch) 转换为文档偏移量（统一两处重复逻辑）
@@ -440,6 +442,20 @@ class CompleteSettingTab extends PluginSettingTab {
 		const models = MODELS as Record<string, string>;
 
 		containerEl.createEl('h2', { text: 'Complete 配置' });
+
+		new Setting(containerEl)
+			.setName('AI运营商选择')
+			.setDesc('选择用于补全的AI服务提供商')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption('aliyun', '阿里云')
+					.addOption('deepseek', 'DeepSeek')
+					.setValue(this.plugin.settings.provider)
+					.onChange(async (value) => {
+						this.plugin.settings.provider = value as 'aliyun' | 'deepseek';
+						await this.plugin.saveSettings();
+					});
+			});
 
 		// 阿里云分组
 		const aliGroup = containerEl.createDiv({ cls: 'setting-group' });
