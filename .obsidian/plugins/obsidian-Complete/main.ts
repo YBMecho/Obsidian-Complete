@@ -440,6 +440,10 @@ class CompleteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		const models = MODELS as Record<string, string>;
+		const deepseekModels: Record<string, string> = {
+			'deepseek-v4-flash': 'deepseek-v4-flash',
+			'deepseek-v4-pro': 'deepseek-v4-pro',
+		};
 
 		containerEl.createEl('h2', { text: 'Complete 配置' });
 
@@ -454,61 +458,92 @@ class CompleteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.provider = value as 'aliyun' | 'deepseek';
 						await this.plugin.saveSettings();
+						this.display();
 					});
 			});
 
-		// 阿里云分组
-		const aliGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const aliHeading = aliGroup.createEl('h3', { text: '阿里云' });
-		aliHeading.style.marginBottom = '0.5em';
-		const aliItems = aliGroup.createDiv({ cls: 'setting-items' });
+		const isDeepSeek = this.plugin.settings.provider === 'deepseek';
 
-		new Setting(aliItems)
-			.setName('百炼业务空间 ID')
-			.setDesc('阿里云百炼平台的业务空间标识')
-			.addText((text) =>
-				text
-					.setPlaceholder('请输入百炼业务空间 ID')
-					.setValue(this.plugin.settings.workspaceId)
-					.onChange(async (value) => {
-						this.plugin.settings.workspaceId = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+		// 动态分组
+		const providerGroup = containerEl.createDiv({ cls: 'setting-group' });
+		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek' : '阿里云' });
+		providerHeading.style.marginBottom = '0.5em';
+		const providerItems = providerGroup.createDiv({ cls: 'setting-items' });
 
-		new Setting(aliItems)
-			.setName('阿里云百炼 API Key')
-			.setDesc('用于调用百炼平台大模型服务')
-			.addText((text) =>
-				text
-					.setPlaceholder('请输入你的百炼 API Key')
-					.setValue(this.plugin.settings.apiKey)
-					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+		if (isDeepSeek) {
+			new Setting(providerItems)
+				.setName('DeepSeek API Key')
+				.setDesc('用于调用 DeepSeek 补全服务')
+				.addText((text) =>
+					text
+						.setPlaceholder('请输入你的 DeepSeek API Key')
+						.setValue(this.plugin.settings.deepSeekApiKey)
+						.onChange(async (value) => {
+							this.plugin.settings.deepSeekApiKey = value.trim();
+							await this.plugin.saveSettings();
+						})
+				);
 
-		new Setting(aliItems)
-			.setName('补全模型')
-			.setDesc('选择用于文本补全的模型')
-			.addDropdown((dropdown) => {
-				dropdown
-					.addOptions(models)
-					.setValue(this.plugin.settings.model)
-					.onChange(async (value) => {
-						this.plugin.settings.model = value;
-						await this.plugin.saveSettings();
-					});
-			});
+			new Setting(providerItems)
+				.setName('补全模型')
+				.setDesc('选择用于文本补全的模型')
+				.addDropdown((dropdown) => {
+					dropdown
+						.addOptions(deepseekModels)
+						.setValue(this.plugin.settings.model)
+						.onChange(async (value) => {
+							this.plugin.settings.model = value;
+							await this.plugin.saveSettings();
+						});
+				});
+		} else {
+			new Setting(providerItems)
+				.setName('百炼业务空间 ID')
+				.setDesc('阿里云百炼平台的业务空间标识')
+				.addText((text) =>
+					text
+						.setPlaceholder('请输入百炼业务空间 ID')
+						.setValue(this.plugin.settings.workspaceId)
+						.onChange(async (value) => {
+							this.plugin.settings.workspaceId = value.trim();
+							await this.plugin.saveSettings();
+						})
+				);
 
-		// 分组
-		const dsGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const dsHeading = dsGroup.createEl('h3', { text: 'DeepSeek' });
-		dsHeading.style.marginBottom = '0.5em';
-		const dsItems = dsGroup.createDiv({ cls: 'setting-items' });
+			new Setting(providerItems)
+				.setName('阿里云百炼 API Key')
+				.setDesc('用于调用百炼平台大模型服务')
+				.addText((text) =>
+					text
+						.setPlaceholder('请输入你的百炼 API Key')
+						.setValue(this.plugin.settings.apiKey)
+						.onChange(async (value) => {
+							this.plugin.settings.apiKey = value.trim();
+							await this.plugin.saveSettings();
+						})
+				);
 
-		new Setting(dsItems)
+			new Setting(providerItems)
+				.setName('补全模型')
+				.setDesc('选择用于文本补全的模型')
+				.addDropdown((dropdown) => {
+					dropdown
+						.addOptions(models)
+						.setValue(this.plugin.settings.model)
+						.onChange(async (value) => {
+							this.plugin.settings.model = value;
+							await this.plugin.saveSettings();
+						});
+				});
+		}
+
+		// DeepSeek FIM 配置
+		const fimGroup = containerEl.createDiv({ cls: 'setting-group' });
+		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek FIM' });
+		fimHeading.style.marginBottom = '0.5em';
+		const fimItems = fimGroup.createDiv({ cls: 'setting-items' });
+
+		new Setting(fimItems)
 			.setName('DeepSeek API Key')
 			.setDesc('用于调用 DeepSeek FIM 补全服务')
 			.addText((text) =>
@@ -521,7 +556,7 @@ class CompleteSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(dsItems)
+		new Setting(fimItems)
 			.setName('模型')
 			.setDesc('当前：deepseek-v4-pro');
 	}
