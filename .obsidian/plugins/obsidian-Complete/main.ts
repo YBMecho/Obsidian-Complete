@@ -353,19 +353,34 @@ export default class CompletePlugin extends Plugin {
 		let startPos: EditorPosition | null = null;
 		let lastEnd: EditorPosition | null = null;
 		let buffer = '';
+		let isAborted = false;
 
 		const cm = (editor as ObsidianEditor).cm;
+
+		// 监听 ESC 键中断流式输出
+		const escHandler = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				isAborted = true;
+				reader.cancel();
+				new Notice('已停止补全');
+			}
+		};
+		cm.dom.addEventListener('keydown', escHandler, true);
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-				if (done) break;
+				if (done || isAborted) break;
 
 				buffer += decoder.decode(value, { stream: true });
 				const lines = buffer.split('\n');
 				buffer = lines.pop() || '';
 
 				for (const line of lines) {
+					if (isAborted) break;
+
 					const trimmed = line.trim();
 					if (!trimmed || !trimmed.startsWith('data:')) continue;
 					const dataStr = trimmed.slice(5).trim();
@@ -398,9 +413,13 @@ export default class CompletePlugin extends Plugin {
 					if (from !== to) {
 						cm.dispatch({ effects: setHighlight.of({ from, to }) });
 					}
+
+					// 自动滚动到最新内容
+					editor.setCursor(lastEnd);
 				}
 			}
 		} finally {
+			cm.dom.removeEventListener('keydown', escHandler, true);
 			try {
 				reader.releaseLock();
 			} catch {
@@ -414,7 +433,9 @@ export default class CompletePlugin extends Plugin {
 			this.activeEditor = editor;
 			this.activeCM = cm;
 			this.installKeyHandler(cm);
-		} else {
+			// 流式结束后，将光标移回插入内容的末尾
+			editor.setCursor(endPos);
+		} else if (!isAborted) {
 			new Notice('补全失败：DeepSeek 模型返回了空内容');
 		}
 	}
@@ -431,19 +452,34 @@ export default class CompletePlugin extends Plugin {
 		let startPos: EditorPosition | null = null;
 		let lastEnd: EditorPosition | null = null;
 		let buffer = '';
+		let isAborted = false;
 
 		const cm = (editor as ObsidianEditor).cm;
+
+		// 监听 ESC 键中断流式输出
+		const escHandler = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				isAborted = true;
+				reader.cancel();
+				new Notice('已停止补全');
+			}
+		};
+		cm.dom.addEventListener('keydown', escHandler, true);
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-				if (done) break;
+				if (done || isAborted) break;
 
 				buffer += decoder.decode(value, { stream: true });
 				const lines = buffer.split('\n');
 				buffer = lines.pop() || '';
 
 				for (const line of lines) {
+					if (isAborted) break;
+
 					const trimmed = line.trim();
 					if (!trimmed || !trimmed.startsWith('data:')) continue;
 					const dataStr = trimmed.slice(5).trim();
@@ -478,9 +514,13 @@ export default class CompletePlugin extends Plugin {
 					if (from !== to) {
 						cm.dispatch({ effects: setHighlight.of({ from, to }) });
 					}
+
+					// 自动滚动到最新内容
+					editor.setCursor(lastEnd);
 				}
 			}
 		} finally {
+			cm.dom.removeEventListener('keydown', escHandler, true);
 			// 显式释放 reader 锁，便于底层连接关闭
 			try {
 				reader.releaseLock();
@@ -495,7 +535,9 @@ export default class CompletePlugin extends Plugin {
 			this.activeEditor = editor;
 			this.activeCM = cm;
 			this.installKeyHandler(cm);
-		} else {
+			// 流式结束后，将光标移回插入内容的末尾
+			editor.setCursor(endPos);
+		} else if (!isAborted) {
 			new Notice(
 				'补全失败：FIM 模型返回了空内容\n该模式对自然语言、Markdown 的补全效果不佳（DeepSeek FIM 主要针对代码场景设计）'
 			);
