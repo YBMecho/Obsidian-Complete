@@ -41,7 +41,9 @@ interface CompleteSettings {
 	workspaceId: string;
 	model: string;
 	deepSeekApiKey: string;
-	provider: 'aliyun' | 'deepseek';
+	zhipuApiKey: string;
+	zhipuModel: string;
+	provider: 'aliyun' | 'deepseek' | 'zhipu';
 	fimModel: string;
 	outputWordCount: number;
 }
@@ -51,6 +53,8 @@ const DEFAULT_SETTINGS: CompleteSettings = {
 	workspaceId: '',
 	model: 'qwen3.7-plus',
 	deepSeekApiKey: '',
+	zhipuApiKey: '',
+	zhipuModel: 'glm-4-flash',
 	provider: 'aliyun',
 	fimModel: 'deepseek-v4-pro',
 	outputWordCount: 10,
@@ -156,11 +160,16 @@ export default class CompletePlugin extends Plugin {
 
 		// 配置校验
 		const isDeepSeek = this.settings.provider === 'deepseek';
+		const isZhipu = this.settings.provider === 'zhipu';
 		if (isDeepSeek && !this.settings.deepSeekApiKey) {
 			new Notice('请先在设置中配置 DeepSeek (Beta) API Key');
 			return;
 		}
-		if (!isDeepSeek && !useFim) {
+		if (isZhipu && !this.settings.zhipuApiKey) {
+			new Notice('请先在设置中配置智谱清言 API Key');
+			return;
+		}
+		if (!isDeepSeek && !isZhipu && !useFim) {
 			if (!this.settings.apiKey) {
 				new Notice('请先在设置中配置百炼 API Key');
 				return;
@@ -185,6 +194,8 @@ export default class CompletePlugin extends Plugin {
 			noticeText = `AI 正在 FIM 补全（${this.settings.fimModel || 'deepseek-v4-pro'}）...`;
 		} else if (isDeepSeek) {
 			noticeText = `AI 正在 PC 补全（${this.settings.model}）...`;
+		} else if (isZhipu) {
+			noticeText = `AI 正在 PC 补全（${this.settings.zhipuModel}）...`;
 		} else {
 			noticeText = `AI 正在 PC 补全（${this.settings.model}）...`;
 		}
@@ -196,7 +207,7 @@ export default class CompletePlugin extends Plugin {
 		}, REQUEST_TIMEOUT_MS);
 
 		try {
-			const apiKey = (isDeepSeek || useFim) ? this.settings.deepSeekApiKey : this.settings.apiKey;
+			const apiKey = (isDeepSeek || useFim) ? this.settings.deepSeekApiKey : (isZhipu ? this.settings.zhipuApiKey : this.settings.apiKey);
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: {
@@ -217,6 +228,8 @@ export default class CompletePlugin extends Plugin {
 				await this.handleFimStream(response, editor, notice);
 			} else if (isDeepSeek) {
 				await this.handleDeepSeekStream(response, editor, notice);
+			} else if (isZhipu) {
+				await this.handleZhipuStream(response, editor, notice);
 			} else {
 				await this.handleStandardResponse(response, editor, notice);
 			}
@@ -242,6 +255,7 @@ export default class CompletePlugin extends Plugin {
 		fimSuffix: string
 	): { url: string; body: Record<string, unknown> } {
 		const isDeepSeek = this.settings.provider === 'deepseek';
+		const isZhipu = this.settings.provider === 'zhipu';
 
 		// 统一的字数提示
 		const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
@@ -258,6 +272,23 @@ export default class CompletePlugin extends Plugin {
 					temperature: 0.7,
 					stream: true,
 					stream_options: { include_usage: true },
+				},
+			};
+		}
+
+		if (isZhipu) {
+			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
+			const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
+			return {
+				url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+				body: {
+					model: this.settings.zhipuModel,
+					messages: [
+						{ role: 'system', content: basePrompt },
+						{ role: 'user', content: prefix },
+					],
+					stream: true,
+					temperature: 1,
 				},
 			};
 		}
@@ -446,6 +477,100 @@ export default class CompletePlugin extends Plugin {
 		}
 	}
 
+	private async handleZhipuStream(response: Response, editor: Editor, notice: Notice) {
+		const reader = response.body?.getReader();
+		if (!reader) {
+			new Notice('无法读取流式响应');
+			return;
+		}
+
+		const decoder = new TextDecoder();
+		let fullContent = '';
+		let startPos: EditorPosition | null = null;
+		let lastEnd: EditorPosition | null = null;
+		let buffer = '';
+		let isAborted = false;
+
+		const cm = (editor as ObsidianEditor).cm;
+
+		const escHandler = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				isAborted = true;
+				reader.cancel();
+				new Notice('已停止补全');
+			}
+		};
+		cm.dom.addEventListener('keydown', escHandler, true);
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done || isAborted) break;
+
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (isAborted) break;
+
+					const trimmed = line.trim();
+					if (!trimmed || !trimmed.startsWith('data:')) continue;
+					const dataStr = trimmed.slice(5).trim();
+					if (dataStr === '[DONE]') continue;
+
+					let chunk: { choices?: { delta?: { content?: string } }[] };
+					try {
+						chunk = JSON.parse(dataStr);
+					} catch (err) {
+						console.warn('智谱 SSE 解析失败:', dataStr, err);
+						continue;
+					}
+
+					const text = chunk.choices?.[0]?.delta?.content;
+					if (!text) continue;
+
+					if (!startPos) {
+						startPos = editor.getCursor();
+					}
+					fullContent += text;
+
+					const currentEnd = lastEnd || startPos;
+					editor.replaceRange(fullContent, startPos, currentEnd);
+					lastEnd = calculateEndPos(startPos, fullContent);
+
+					const from = posToOffset(cm, startPos.line, startPos.ch);
+					const to = from + fullContent.length;
+					if (from !== to) {
+						cm.dispatch({ effects: setHighlight.of({ from, to }) });
+					}
+
+					editor.setCursor(lastEnd);
+				}
+			}
+		} finally {
+			cm.dom.removeEventListener('keydown', escHandler, true);
+			try {
+				reader.releaseLock();
+			} catch {
+				// reader 已关闭，忽略
+			}
+		}
+
+		if (fullContent && startPos) {
+			const endPos = calculateEndPos(startPos, fullContent);
+			this.insertedRange = { from: startPos, to: endPos };
+			this.activeEditor = editor;
+			this.activeCM = cm;
+			this.installKeyHandler(cm);
+			editor.setCursor(endPos);
+		} else if (!isAborted) {
+			new Notice('补全失败：智谱清言模型返回了空内容');
+		}
+	}
+
 	private async handleFimStream(response: Response, editor: Editor, notice: Notice) {
 		const reader = response.body?.getReader();
 		if (!reader) {
@@ -628,6 +753,13 @@ class CompleteSettingTab extends PluginSettingTab {
 			'deepseek-v4-flash': 'deepseek-v4-flash',
 			'deepseek-v4-pro': 'deepseek-v4-pro',
 		};
+		const zhipuModels: Record<string, string> = {};
+		// 从 MODELS 中筛选出智谱清言的模型
+		for (const key in models) {
+			if (key.startsWith('glm-')) {
+				zhipuModels[key] = models[key];
+			}
+		}
 
 		containerEl.createEl('h2', { text: 'Complete 配置' });
 
@@ -638,9 +770,10 @@ class CompleteSettingTab extends PluginSettingTab {
 				dropdown
 					.addOption('aliyun', '阿里云')
 					.addOption('deepseek', 'DeepSeek (Beta)')
+					.addOption('zhipu', '智谱清言')
 					.setValue(this.plugin.settings.provider)
 					.onChange(async (value) => {
-						this.plugin.settings.provider = value as 'aliyun' | 'deepseek';
+						this.plugin.settings.provider = value as 'aliyun' | 'deepseek' | 'zhipu';
 						await this.plugin.saveSettings();
 						this.display();
 					});
@@ -705,10 +838,11 @@ class CompleteSettingTab extends PluginSettingTab {
 		wordCountSetting.settingEl.appendChild(controlContainer);
 
 		const isDeepSeek = this.plugin.settings.provider === 'deepseek';
+		const isZhipu = this.plugin.settings.provider === 'zhipu';
 
 		// 动态分组
 		const providerGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek (Beta)' : '阿里云', cls: 'setting-group-heading' });
+		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek (Beta)' : (isZhipu ? '智谱清言' : '阿里云'), cls: 'setting-group-heading' });
 		const providerItems = providerGroup.createDiv({ cls: 'setting-items' });
 
 		if (isDeepSeek) {
@@ -734,6 +868,32 @@ class CompleteSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.model)
 						.onChange(async (value) => {
 							this.plugin.settings.model = value;
+							await this.plugin.saveSettings();
+						});
+				});
+		} else if (isZhipu) {
+			new Setting(providerItems)
+				.setName('智谱清言 API Key')
+				.setDesc('用于调用智谱清言补全服务')
+				.addText((text) =>
+					text
+						.setPlaceholder('请输入你的智谱清言 API Key')
+						.setValue(this.plugin.settings.zhipuApiKey)
+						.onChange(async (value) => {
+							this.plugin.settings.zhipuApiKey = value.trim();
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(providerItems)
+				.setName('补全模型')
+				.setDesc('选择用于文本补全的模型')
+				.addDropdown((dropdown) => {
+					dropdown
+						.addOptions(zhipuModels)
+						.setValue(this.plugin.settings.zhipuModel)
+						.onChange(async (value) => {
+							this.plugin.settings.zhipuModel = value;
 							await this.plugin.saveSettings();
 						});
 				});
