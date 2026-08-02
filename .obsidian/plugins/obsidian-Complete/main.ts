@@ -20,9 +20,7 @@ const highlightField = StateField.define<DecorationSet>({
 				if (e.value === null) return Decoration.none;
 				return Decoration.set([
 					Decoration.mark({
-						attributes: {
-							style: 'background-color: #73AE52; color: #FBF1D7;',
-						},
+						class: 'cm-highlight-completion',
 					}).range(e.value.from, e.value.to),
 				]);
 			}
@@ -652,26 +650,17 @@ class CompleteSettingTab extends PluginSettingTab {
 			.setDesc('设置AI输出内容的大致字数（0表示由AI自行决定）');
 
 		const controlContainer = containerEl.createDiv({ cls: 'word-count-control' });
-		controlContainer.style.display = 'flex';
-		controlContainer.style.alignItems = 'center';
-		controlContainer.style.gap = '10px';
-		controlContainer.style.marginTop = '8px';
 
 		// 滑动条（横向细线）
-		const slider = controlContainer.createEl('input', { type: 'range' });
+		const slider = controlContainer.createEl('input', { type: 'range', cls: 'word-count-slider' });
 		slider.min = '0';
 		slider.max = '100';
 		slider.step = '1';
-		slider.style.width = '120px';
-		slider.style.height = '2px';
-		slider.style.accentColor = '#663399';
-		slider.style.cursor = 'pointer';
 
 		// 数字输入框
-		const numberInput = controlContainer.createEl('input', { type: 'number' });
+		const numberInput = controlContainer.createEl('input', { type: 'number', cls: 'word-count-input' });
 		numberInput.placeholder = '10';
 		numberInput.min = '0';
-		numberInput.style.width = '80px';
 
 		// 值转换函数：滑块位置 <-> 字数
 		const sliderToWords = (sliderVal: number): number => {
@@ -717,8 +706,7 @@ class CompleteSettingTab extends PluginSettingTab {
 
 		// 动态分组
 		const providerGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek (Beta)' : '阿里云' });
-		providerHeading.style.marginBottom = '0.5em';
+		const providerHeading = providerGroup.createEl('h3', { text: isDeepSeek ? 'DeepSeek (Beta)' : '阿里云', cls: 'setting-group-heading' });
 		const providerItems = providerGroup.createDiv({ cls: 'setting-items' });
 
 		if (isDeepSeek) {
@@ -790,8 +778,7 @@ class CompleteSettingTab extends PluginSettingTab {
 
 		// DeepSeek (Beta) FIM 配置
 		const fimGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek FIM (Beta)' });
-		fimHeading.style.marginBottom = '0.5em';
+		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek FIM (Beta)', cls: 'setting-group-heading' });
 		const fimItems = fimGroup.createDiv({ cls: 'setting-items' });
 
 		new Setting(fimItems)

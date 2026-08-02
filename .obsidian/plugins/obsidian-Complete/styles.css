@@ -1,1 +1,30 @@
 /* Complete 插件样式 */
+
+/* 补全高亮样式 */
+.cm-highlight-completion {
+	background-color: #73AE52;
+	color: #FBF1D7;
+}
+
+/* 设置面板样式 */
+.word-count-control {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 8px;
+}
+
+.word-count-slider {
+	width: 120px;
+	height: 2px;
+	accent-color: #663399;
+	cursor: pointer;
+}
+
+.word-count-input {
+	width: 80px;
+}
+
+.setting-group-heading {
+	margin-bottom: 0.5em;
+}
