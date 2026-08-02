@@ -44,6 +44,7 @@ interface CompleteSettings {
 	model: string;
 	deepSeekApiKey: string;
 	provider: 'aliyun' | 'deepseek';
+	fimModel: string;
 }
 
 const DEFAULT_SETTINGS: CompleteSettings = {
@@ -52,6 +53,7 @@ const DEFAULT_SETTINGS: CompleteSettings = {
 	model: 'qwen3.7-plus',
 	deepSeekApiKey: '',
 	provider: 'aliyun',
+	fimModel: 'deepseek-v4-pro',
 };
 
 // 把 (line, ch) 转换为文档偏移量（统一两处重复逻辑）
@@ -149,7 +151,8 @@ export default class CompletePlugin extends Plugin {
 			new Notice('FIM 补全需要光标后面有文本内容');
 			return;
 		}
-		const useFim = forceFim && fimSuffix.length > 0;
+		// 当光标后有内容时自动使用 FIM，或者用户显式调用 FIM 命令
+		const useFim = fimSuffix.length > 0;
 
 		// 配置校验
 		const isDeepSeek = this.settings.provider === 'deepseek';
@@ -179,7 +182,7 @@ export default class CompletePlugin extends Plugin {
 		// 生成提示信息
 		let noticeText = 'AI 正在补全...';
 		if (useFim) {
-			noticeText = 'AI 正在 FIM 补全（deepseek-v4-pro）...';
+			noticeText = `AI 正在 FIM 补全（${this.settings.fimModel || 'deepseek-v4-pro'}）...`;
 		} else if (isDeepSeek) {
 			noticeText = `AI 正在 PC 补全（${this.settings.model}）...`;
 		} else {
@@ -244,7 +247,7 @@ export default class CompletePlugin extends Plugin {
 			return {
 				url: 'https://api.deepseek.com/beta/completions',
 				body: {
-					model: 'deepseek-v4-pro',
+					model: this.settings.fimModel || 'deepseek-v4-pro',
 					prompt: fimPrefix,
 					suffix: fimSuffix,
 					max_tokens: MAX_FIM_TOKENS,
@@ -539,7 +542,7 @@ export default class CompletePlugin extends Plugin {
 			editor.setCursor(endPos);
 		} else if (!isAborted) {
 			new Notice(
-				'补全失败：FIM 模型返回了空内容\n该模式对自然语言、Markdown 的补全效果不佳（DeepSeek FIM 主要针对代码场景设计）'
+				'补全失败：FIM 模型返回了空内容\n该模式对自然语言、Markdown 的补全效果不佳（DeepSeek (Beta) FIM 主要针对代码场景设计）\n因为它是 Beta ,有问条很正常'
 			);
 		}
 	}
@@ -717,7 +720,7 @@ class CompleteSettingTab extends PluginSettingTab {
 
 		// DeepSeek (Beta) FIM 配置
 		const fimGroup = containerEl.createDiv({ cls: 'setting-group' });
-		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek (Beta) FIM' });
+		const fimHeading = fimGroup.createEl('h3', { text: 'DeepSeek FIM (Beta)' });
 		fimHeading.style.marginBottom = '0.5em';
 		const fimItems = fimGroup.createDiv({ cls: 'setting-items' });
 
@@ -735,8 +738,17 @@ class CompleteSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(fimItems)
-			.setName('模型')
-			.setDesc('当前：deepseek-v4-pro');
+			.setName('FIM 模型')
+			.setDesc('选择用于 FIM 补全的模型')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions(deepseekModels)
+					.setValue(this.plugin.settings.fimModel || 'deepseek-v4-pro')
+					.onChange(async (value) => {
+						this.plugin.settings.fimModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
 	}
 }
  
