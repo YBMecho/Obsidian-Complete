@@ -45,6 +45,7 @@ interface CompleteSettings {
 	deepSeekApiKey: string;
 	provider: 'aliyun' | 'deepseek';
 	fimModel: string;
+	outputWordCount: number;
 }
 
 const DEFAULT_SETTINGS: CompleteSettings = {
@@ -54,6 +55,7 @@ const DEFAULT_SETTINGS: CompleteSettings = {
 	deepSeekApiKey: '',
 	provider: 'aliyun',
 	fimModel: 'deepseek-v4-pro',
+	outputWordCount: 10,
 };
 
 // 把 (line, ch) 转换为文档偏移量（统一两处重复逻辑）
@@ -261,12 +263,13 @@ export default class CompletePlugin extends Plugin {
 		if (isDeepSeek) {
 			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
 			const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
+			const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
 			return {
 				url: 'https://api.deepseek.com/beta/chat/completions',
 				body: {
 					model: this.settings.model,
 					messages: [
-						{ role: 'user', content: '请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。' },
+						{ role: 'user', content: `请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。${wordCountHint}` },
 						{ role: 'assistant', content: prefix, prefix: true },
 					],
 					stream: true,
@@ -276,6 +279,7 @@ export default class CompletePlugin extends Plugin {
 
 		const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
 		const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
+		const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
 		return {
 			url: `https://${this.settings.workspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`,
 			body: {
@@ -283,8 +287,7 @@ export default class CompletePlugin extends Plugin {
 				messages: [
 					{
 						role: 'user',
-						content:
-							'请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。输出后缀内容要不超过前缀内容的2倍。',
+						content: `请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。输出后缀内容要不超过前缀内容的2倍。${wordCountHint}`,
 					},
 					{ role: 'assistant', content: prefix, partial: true },
 				],
@@ -642,6 +645,73 @@ class CompleteSettingTab extends PluginSettingTab {
 						this.display();
 					});
 			});
+
+		// 输出字数设置
+		const wordCountSetting = new Setting(containerEl)
+			.setName('输出字数设置')
+			.setDesc('设置AI输出内容的大致字数（0表示由AI自行决定）');
+
+		const controlContainer = containerEl.createDiv({ cls: 'word-count-control' });
+		controlContainer.style.display = 'flex';
+		controlContainer.style.alignItems = 'center';
+		controlContainer.style.gap = '10px';
+		controlContainer.style.marginTop = '8px';
+
+		// 滑动条（横向细线）
+		const slider = controlContainer.createEl('input', { type: 'range' });
+		slider.min = '0';
+		slider.max = '100';
+		slider.step = '1';
+		slider.style.width = '120px';
+		slider.style.height = '2px';
+		slider.style.accentColor = '#663399';
+		slider.style.cursor = 'pointer';
+
+		// 数字输入框
+		const numberInput = controlContainer.createEl('input', { type: 'number' });
+		numberInput.placeholder = '10';
+		numberInput.min = '0';
+		numberInput.style.width = '80px';
+
+		// 值转换函数：滑块位置 <-> 字数
+		const sliderToWords = (sliderVal: number): number => {
+			if (sliderVal === 100) return 0; // 100% = AI自行决定
+			// 0% ~ 90% 映射到 5 ~ 1000
+			return Math.round((sliderVal / 90) * 995 + 5);
+		};
+
+		const wordsToSlider = (words: number): number => {
+			if (words === 0) return 100; // AI自行决定 = 100%
+			if (words <= 5) return 0;
+			if (words >= 1000) return 90;
+			return Math.round(((words - 5) / 995) * 90);
+		};
+
+		// 初始化
+		const initValue = this.plugin.settings.outputWordCount;
+		slider.value = String(wordsToSlider(initValue));
+		numberInput.value = initValue === 0 ? '' : String(initValue);
+
+		// 滑块变化 -> 更新输入框
+		slider.addEventListener('input', async () => {
+			const words = sliderToWords(Number(slider.value));
+			numberInput.value = words === 0 ? '' : String(words);
+			this.plugin.settings.outputWordCount = words;
+			await this.plugin.saveSettings();
+		});
+
+		// 输入框变化 -> 更新滑块
+		numberInput.addEventListener('input', async () => {
+			let words = Number(numberInput.value);
+			if (isNaN(words) || words < 0 || numberInput.value === '') {
+				words = 0;
+			}
+			slider.value = String(wordsToSlider(words));
+			this.plugin.settings.outputWordCount = words;
+			await this.plugin.saveSettings();
+		});
+
+		wordCountSetting.settingEl.appendChild(controlContainer);
 
 		const isDeepSeek = this.plugin.settings.provider === 'deepseek';
 
