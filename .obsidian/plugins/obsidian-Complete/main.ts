@@ -243,6 +243,10 @@ export default class CompletePlugin extends Plugin {
 	): { url: string; body: Record<string, unknown> } {
 		const isDeepSeek = this.settings.provider === 'deepseek';
 
+		// 统一的字数提示
+		const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
+		const basePrompt = `请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。${wordCountHint}`;
+
 		if (useFim) {
 			return {
 				url: 'https://api.deepseek.com/beta/completions',
@@ -261,13 +265,12 @@ export default class CompletePlugin extends Plugin {
 		if (isDeepSeek) {
 			const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
 			const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
-			const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
 			return {
 				url: 'https://api.deepseek.com/beta/chat/completions',
 				body: {
 					model: this.settings.model,
 					messages: [
-						{ role: 'user', content: `请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。${wordCountHint}` },
+						{ role: 'user', content: basePrompt },
 						{ role: 'assistant', content: prefix, prefix: true },
 					],
 					stream: true,
@@ -277,7 +280,6 @@ export default class CompletePlugin extends Plugin {
 
 		const textBefore = editor.getRange({ line: 0, ch: 0 }, cursor);
 		const prefix = textBefore.length > MAX_PREFIX_LENGTH ? textBefore.slice(-MAX_PREFIX_LENGTH) : textBefore;
-		const wordCountHint = this.settings.outputWordCount === 0 ? '' : ` 输出内容 ${this.settings.outputWordCount} 字左右。`;
 		return {
 			url: `https://${this.settings.workspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`,
 			body: {
@@ -285,7 +287,7 @@ export default class CompletePlugin extends Plugin {
 				messages: [
 					{
 						role: 'user',
-						content: `请根据用户提供的文本前缀，自然地续写后续内容。保持风格一致，直接续写，不要重复前缀内容，不要添加额外说明。输出后缀内容要不超过前缀内容的2倍。${wordCountHint}`,
+						content: basePrompt,
 					},
 					{ role: 'assistant', content: prefix, partial: true },
 				],
